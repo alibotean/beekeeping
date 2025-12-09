@@ -93,6 +93,14 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
         self.history['nectar_availability'] = []
         self.history['pollen_availability'] = []
 
+        # Honey stores tracking
+        self.honey_stores = 15.0  # Start with 15kg winter stores
+        self.history['honey_stores'] = []
+        self.history['daily_honey_production'] = []
+        self.history['daily_honey_consumption'] = []
+        self.history['net_honey_change'] = []
+        self.history['supering_recommendations'] = []
+
     def _date_to_day_of_year(self, date: tuple) -> int:
         """
         Convert (month, day) tuple to day of year (1-365).
@@ -107,6 +115,103 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
         # Days before each month in non-leap year
         days_before_month = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
         return days_before_month[month - 1] + day
+
+    def _calculate_honey_production(self, nectar_availability: float) -> float:
+        """
+        Calculate daily honey production based on nectar availability and forager population.
+
+        Assumptions:
+        - ~25-35% of adult bees are foragers (varies by age distribution)
+        - Effective collection rate accounts for: multiple trips, partial loads,
+          unsuccessful trips, weather interruptions, and foraging efficiency
+        - Peak flow (nectar=1.0): Strong colony brings ~4-5 kg nectar/day → ~1.6-2.0 kg honey/day
+        - Nectar → honey conversion is ~2.5:1 (honey is concentrated nectar)
+        - Realistic surplus: 30-50 kg per hive per season
+
+        Args:
+            nectar_availability: 0.0-1.0 indicating nectar flow strength
+
+        Returns:
+            Daily honey production in kg
+        """
+        # Estimate forager population (25-35% of adults, more during flows)
+        forager_percentage = 0.25 + (nectar_availability * 0.10)  # 25-35%
+        foragers = self.adult_bees * forager_percentage
+
+        # Effective nectar collection per forager per day (accounts for all factors)
+        # Peak conditions (nectar=1.0): ~150mg effective collection per forager
+        # This is the NET result of: trips × load × success_rate × weather × efficiency
+        effective_nectar_per_forager = 0.00015 * nectar_availability  # kg
+
+        # Total nectar collected
+        total_nectar = foragers * effective_nectar_per_forager
+
+        # Convert to honey (2.5:1 ratio)
+        honey_produced = total_nectar / 2.5
+
+        return honey_produced
+
+    def _calculate_honey_consumption(self) -> float:
+        """
+        Calculate daily honey consumption for colony maintenance and brood rearing.
+
+        Assumptions:
+        - Adult bee: ~10mg honey/day = 0.00001 kg
+        - Brood cell: ~20mg honey equivalent over development = ~1mg/day = 0.000001 kg
+        - More consumption during cold weather (cluster heating)
+
+        Returns:
+            Daily honey consumption in kg
+        """
+        # Adult bee consumption (10mg/bee/day)
+        adult_consumption = self.adult_bees * 0.00001
+
+        # Brood consumption (nurse bees feeding larvae)
+        # Effective consumption ~1mg/cell/day
+        brood_consumption = self.get_current_brood_count() * 0.000001
+
+        total_consumption = adult_consumption + brood_consumption
+
+        return total_consumption
+
+    def _should_super(self, factors: dict, day: int) -> tuple:
+        """
+        Determine if this is a good time to add honey supers.
+
+        Criteria for supering:
+        1. Brood nest occupancy >= 70% (colony is strong)
+        2. Nectar availability >= 0.6 (good flow active or imminent)
+        3. Honey stores >= 8kg (colony has sufficient reserves)
+        4. Not in winter dormancy (Nov-Feb)
+
+        Returns:
+            Tuple of (should_super: bool, reason: str)
+        """
+        occupancy = self.get_brood_occupancy_percentage()
+        nectar = factors['nectar_availability']
+
+        # Check criteria
+        if self.current_day_of_year < 60 or self.current_day_of_year > 305:
+            # Winter period (Jan-Feb, Nov-Dec)
+            return False, ""
+
+        if occupancy >= 70 and nectar >= 0.6 and self.honey_stores >= 8:
+            flow_names = ', '.join(factors['active_flow_names'][:2])
+            return True, f"SUPER NOW! {flow_names} flow active, {occupancy:.0f}% brood occupancy"
+
+        # Check for upcoming major flows (within 5 days)
+        upcoming_strong = False
+        for future_day in range(1, 6):
+            future_doy = ((self.current_day_of_year + future_day - 1) % 365) + 1
+            future_factors = self.calendar.get_daily_factors(future_doy)
+            if future_factors['nectar_availability'] >= 0.8:
+                upcoming_strong = True
+                break
+
+        if occupancy >= 65 and upcoming_strong and self.honey_stores >= 8:
+            return True, f"SUPER NOW! Major flow starting in <5 days, {occupancy:.0f}% occupancy"
+
+        return False, ""
 
     def simulate_day(self, day: int):
         """
@@ -145,6 +250,19 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
         self.egg_laying_rate = original_egg
         self.attrition_rate = original_attrition
 
+        # Calculate honey production and consumption
+        honey_produced = self._calculate_honey_production(factors['nectar_availability'])
+        honey_consumed = self._calculate_honey_consumption()
+        net_honey_change = honey_produced - honey_consumed
+
+        # Update honey stores
+        self.honey_stores += net_honey_change
+        # Don't let stores go negative (colony would starve in reality)
+        self.honey_stores = max(0, self.honey_stores)
+
+        # Check if supering is recommended
+        should_super, super_reason = self._should_super(factors, day)
+
         # Track calendar-specific data
         active_flows = self.calendar.get_active_flows(self.current_day_of_year)
         date_string = self.calendar.day_of_year_to_date_string(self.current_day_of_year)
@@ -155,6 +273,13 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
         self.history['effective_attrition'].append(effective_attrition)
         self.history['nectar_availability'].append(factors['nectar_availability'])
         self.history['pollen_availability'].append(factors['pollen_availability'])
+
+        # Track honey stores
+        self.history['honey_stores'].append(self.honey_stores)
+        self.history['daily_honey_production'].append(honey_produced)
+        self.history['daily_honey_consumption'].append(honey_consumed)
+        self.history['net_honey_change'].append(net_honey_change)
+        self.history['supering_recommendations'].append(super_reason if should_super else "")
 
         # Increment day of year (wrap at 365)
         self.current_day_of_year = (self.current_day_of_year % 365) + 1
@@ -202,6 +327,11 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
             # Simulate the day
             self.simulate_day(day)
 
+            # Check for supering recommendations
+            if self.history['supering_recommendations'][-1]:
+                print(f"\n  🍯 Day {day} ({self.history['calendar_date'][-1]}): {self.history['supering_recommendations'][-1]}")
+                print(f"     Honey stores: {self.honey_stores:.1f} kg\n")
+
             # Print status every 30 days (monthly update)
             if day % 30 == 0:
                 eggs, larvae, pupae = self.get_brood_by_stage()
@@ -211,7 +341,7 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
 
                 print(f"Day {day:3d} ({date_str}): Adult bees: {self.adult_bees:6,}, "
                       f"Brood: {self.get_current_brood_count():6,}, "
-                      f"Occupancy: {occupancy:5.1f}%")
+                      f"Occupancy: {occupancy:5.1f}%, Honey: {self.honey_stores:5.1f} kg")
                 if active_flows:
                     print(f"           Active flows: {', '.join(active_flows[:3])}")
 
@@ -230,7 +360,7 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
         - Additional panel showing effective rates over time
         - Seasonal context annotations
         """
-        fig, axes = plt.subplots(3, 2, figsize=(16, 15))
+        fig, axes = plt.subplots(4, 2, figsize=(16, 18))
         fig.suptitle(f'Seasonal Bee Colony Dynamics - {self.calendar.location_name}',
                      fontsize=16, fontweight='bold')
 
@@ -307,34 +437,77 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
         ax5.set_xticks([days[i] for i in tick_indices])
         ax5.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
 
-        # Plot 6: Brood cell occupancy percentage with detailed breakdown
+        # Plot 6: Honey stores with supering recommendations
         ax6 = axes[2, 1]
+        ax6.plot(days, self.history['honey_stores'], 'gold', linewidth=2.5, label='Honey Stores')
+        ax6.fill_between(days, self.history['honey_stores'], alpha=0.3, color='gold')
 
-        # Main line and fill
-        line, = ax6.plot(days, self.history['brood_occupancy_pct'], 'r-', linewidth=2, label='Occupancy')
-        ax6.fill_between(days, self.history['brood_occupancy_pct'], alpha=0.3, color='red')
-
-        # Add scatter points every 5 days for tooltip targets
-        sample_indices = list(range(0, len(days), 5))
-        scatter = ax6.scatter([days[i] for i in sample_indices],
-                             [self.history['brood_occupancy_pct'][i] for i in sample_indices],
-                             c='darkred', s=30, alpha=0.6, zorder=5)
+        # Mark supering recommendations
+        super_days = [i for i, rec in enumerate(self.history['supering_recommendations']) if rec]
+        if super_days:
+            super_stores = [self.history['honey_stores'][i] for i in super_days]
+            ax6.scatter([days[i] for i in super_days], super_stores,
+                       c='red', s=100, marker='^', zorder=5, label='ADD SUPER HERE')
 
         # Reference lines
-        ax6.axhline(y=80, color='orange', linestyle='--', linewidth=1, label='80% (High)')
-        ax6.axhline(y=50, color='yellow', linestyle='--', linewidth=1, label='50% (Medium)')
+        ax6.axhline(y=8, color='orange', linestyle='--', linewidth=1, label='Min for supering (8kg)')
+        ax6.axhline(y=15, color='green', linestyle='--', linewidth=1, label='Good reserves (15kg)')
 
         ax6.set_xlabel('Days')
-        ax6.set_ylabel('Occupancy (%)')
-        ax6.set_title('Brood Cell Occupancy (hover over points for details)')
-        ax6.set_ylim(0, 100)
-        ax6.legend(loc='upper left')
+        ax6.set_ylabel('Honey Stores (kg)')
+        ax6.set_title('Honey Stores & Supering Recommendations')
+        ax6.legend(loc='upper left', fontsize=8)
         ax6.grid(True, alpha=0.3)
         ax6.set_xticks([days[i] for i in tick_indices])
         ax6.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
 
+        # Plot 7: Honey production vs consumption
+        ax7 = axes[3, 0]
+        ax7.plot(days, self.history['daily_honey_production'], 'green',
+                linewidth=2, alpha=0.7, label='Production')
+        ax7.plot(days, self.history['daily_honey_consumption'], 'red',
+                linewidth=2, alpha=0.7, label='Consumption')
+        ax7.fill_between(days, self.history['daily_honey_production'],
+                        alpha=0.2, color='green')
+        ax7.fill_between(days, self.history['daily_honey_consumption'],
+                        alpha=0.2, color='red')
+        ax7.set_xlabel('Days')
+        ax7.set_ylabel('Honey (kg/day)')
+        ax7.set_title('Daily Honey Production vs Consumption')
+        ax7.legend()
+        ax7.grid(True, alpha=0.3)
+        ax7.set_xticks([days[i] for i in tick_indices])
+        ax7.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
+
+        # Plot 8: Brood cell occupancy percentage with detailed breakdown
+        ax8 = axes[3, 1]
+
+        # Main line and fill
+        line, = ax8.plot(days, self.history['brood_occupancy_pct'], 'r-', linewidth=2, label='Occupancy')
+        ax8.fill_between(days, self.history['brood_occupancy_pct'], alpha=0.3, color='red')
+
+        # Add scatter points every 5 days for tooltip targets
+        sample_indices = list(range(0, len(days), 5))
+        scatter = ax8.scatter([days[i] for i in sample_indices],
+                             [self.history['brood_occupancy_pct'][i] for i in sample_indices],
+                             c='darkred', s=30, alpha=0.6, zorder=5)
+
+        # Reference lines
+        ax8.axhline(y=80, color='orange', linestyle='--', linewidth=1, label='80% (High)')
+        ax8.axhline(y=50, color='yellow', linestyle='--', linewidth=1, label='50% (Medium)')
+        ax8.axhline(y=70, color='red', linestyle=':', linewidth=1, label='70% (Super threshold)')
+
+        ax8.set_xlabel('Days')
+        ax8.set_ylabel('Occupancy (%)')
+        ax8.set_title('Brood Cell Occupancy (hover over points for details)')
+        ax8.set_ylim(0, 100)
+        ax8.legend(loc='upper left', fontsize=8)
+        ax8.grid(True, alpha=0.3)
+        ax8.set_xticks([days[i] for i in tick_indices])
+        ax8.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
+
         # Create annotation for tooltip
-        annot = ax6.annotate("", xy=(0, 0), xytext=(15, 15),
+        annot = ax8.annotate("", xy=(0, 0), xytext=(15, 15),
                             textcoords="offset points",
                             bbox=dict(boxstyle="round,pad=0.5", fc="yellow", alpha=0.9),
                             arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0"),
@@ -342,7 +515,7 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
 
         # Hover event handler
         def hover(event):
-            if event.inaxes == ax6:
+            if event.inaxes == ax8:
                 # Check if mouse is near any scatter point
                 cont, ind = scatter.contains(event)
                 if cont:
@@ -424,6 +597,24 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
 
         print(f"\nEgg laying rate range: {min_egg_rate} - {max_egg_rate} eggs/day")
         print(f"Base rate: {self.base_egg_laying_rate} eggs/day")
+
+        # Honey production summary
+        total_produced = sum(self.history['daily_honey_production'])
+        total_consumed = sum(self.history['daily_honey_consumption'])
+        max_stores = max(self.history['honey_stores'])
+
+        print(f"\n=== Honey Production Summary ===")
+        print(f"Total honey produced: {total_produced:.1f} kg")
+        print(f"Total honey consumed: {total_consumed:.1f} kg")
+        print(f"Net honey gain: {total_produced - total_consumed:.1f} kg")
+        print(f"Peak honey stores: {max_stores:.1f} kg")
+        print(f"Final honey stores: {self.honey_stores:.1f} kg")
+
+        # Count supering recommendations
+        super_count = sum(1 for rec in self.history['supering_recommendations'] if rec)
+        if super_count > 0:
+            print(f"\n🍯 Supering recommended {super_count} times during simulation")
+            print(f"Review the simulation output above for specific dates")
 
 
 if __name__ == "__main__":
