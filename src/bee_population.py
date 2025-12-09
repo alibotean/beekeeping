@@ -16,7 +16,7 @@ class BeeHiveSimulator:
     def __init__(self, 
                  total_frames=10,
                  initial_brood_frames=6,
-                 attrition_rate=1000,
+                 attrition_rate=300,
                  egg_laying_rate=1100,
                  worker_development_days=21,
                  queen_development_days=16,
@@ -58,7 +58,11 @@ class BeeHiveSimulator:
             'total_brood': [],
             'eggs_laid': [],
             'bees_emerged': [],
-            'bees_died': []
+            'bees_died': [],
+            'eggs': [],
+            'larvae': [],
+            'pupae': [],
+            'brood_occupancy_pct': []
         }
     
     def get_max_brood_capacity(self):
@@ -71,12 +75,51 @@ class BeeHiveSimulator:
     def get_current_brood_count(self):
         """Count all developing brood across all stages"""
         return sum(self.developing_brood)
-    
+
+    def get_brood_by_stage(self):
+        """
+        Get brood counts by developmental stage:
+        - Eggs: days 0-2 (days 1-3 of development)
+        - Larvae: days 3-7 (days 4-8 of development)
+        - Pupae: days 8-20 (days 9-21 of development)
+
+        Returns: tuple of (eggs, larvae, pupae)
+        """
+        brood_list = list(self.developing_brood)
+
+        # Days 0-2 are eggs (first 3 days)
+        eggs = sum(brood_list[0:3])
+
+        # Days 3-7 are larvae (days 4-8)
+        larvae = sum(brood_list[3:8])
+
+        # Days 8-20 are pupae (days 9-21)
+        pupae = sum(brood_list[8:])
+
+        return eggs, larvae, pupae
+
+    def get_brood_occupancy_percentage(self):
+        """Calculate what percentage of available brood cells are occupied"""
+        current_brood = self.get_current_brood_count()
+        max_capacity = self.get_max_brood_capacity()
+
+        if max_capacity == 0:
+            return 0.0
+
+        return (current_brood / max_capacity) * 100.0
+
     def add_frames(self, num_frames):
         """Add frames to the brood chamber (simulates hive expansion)"""
         self.brood_frames = min(self.brood_frames + num_frames, 
                                  self.total_frames)
         print(f"  Added {num_frames} frame(s). Total brood frames: {self.brood_frames}")
+    
+    def lose_queen(self, day):
+        """Simulate queen loss - colony becomes queenless"""
+        self.has_laying_queen = False
+        self.queen_development_day = 0  # Start counting days for emergency queen cells
+        print(f"  Day {day}: QUEEN LOST - Colony is now queenless")
+        print(f"  Emergency queen cells being started from young larvae")
     
     def simulate_day(self, day):
         """Simulate one day in the hive"""
@@ -128,19 +171,25 @@ class BeeHiveSimulator:
                 print(f"  Day {day}: Queen mated and started laying eggs")
         
         # 5. RECORD HISTORY
+        eggs, larvae, pupae = self.get_brood_by_stage()
         self.history['day'].append(day)
         self.history['adult_bees'].append(self.adult_bees)
         self.history['total_brood'].append(self.get_current_brood_count())
         self.history['eggs_laid'].append(eggs_laid_today)
         self.history['bees_emerged'].append(bees_emerged_today)
         self.history['bees_died'].append(bees_died_today)
+        self.history['eggs'].append(eggs)
+        self.history['larvae'].append(larvae)
+        self.history['pupae'].append(pupae)
+        self.history['brood_occupancy_pct'].append(self.get_brood_occupancy_percentage())
     
-    def run_simulation(self, num_days, frames_to_add=None):
+    def run_simulation(self, num_days, frames_to_add=None, queen_loss_day=None):
         """
         Run the simulation for specified number of days
         
         frames_to_add: dict mapping day number to number of frames to add
                        e.g., {1: 2, 10: 1, 20: 1}
+        queen_loss_day: day on which the queen is lost (None = no queen loss)
         """
         if frames_to_add is None:
             frames_to_add = {}
@@ -149,21 +198,31 @@ class BeeHiveSimulator:
         print(f"Initial adult bees: {self.adult_bees:,}")
         print(f"Initial brood frames: {self.brood_frames}")
         print(f"Egg laying rate: {self.egg_laying_rate} eggs/day")
-        print(f"Attrition rate: {self.attrition_rate} bees/day\n")
+        print(f"Attrition rate: {self.attrition_rate} bees/day")
+        if queen_loss_day is not None:
+            print(f"Queen loss scheduled for day: {queen_loss_day}")
+        print()
         
         for day in range(num_days):
             # Check if we should add frames on this day
             if day in frames_to_add:
                 self.add_frames(frames_to_add[day])
             
+            # Check if queen is lost on this day
+            if queen_loss_day is not None and day == queen_loss_day:
+                self.lose_queen(day)
+            
             # Simulate the day
             self.simulate_day(day)
             
             # Print status every 10 days
             if day % 10 == 0:
+                eggs, larvae, pupae = self.get_brood_by_stage()
+                occupancy = self.get_brood_occupancy_percentage()
                 print(f"Day {day:3d}: Adult bees: {self.adult_bees:6,}, "
-                      f"Brood: {self.get_current_brood_count():6,}, "
-                      f"Capacity: {self.get_max_brood_capacity():6,}")
+                      f"Brood: {self.get_current_brood_count():6,} "
+                      f"(Eggs: {eggs:5,}, Larvae: {larvae:5,}, Pupae: {pupae:5,}), "
+                      f"Occupancy: {occupancy:5.1f}%")
         
         print(f"\n=== Simulation Complete ===")
         print(f"Final adult population: {self.adult_bees:,}")
@@ -171,12 +230,12 @@ class BeeHiveSimulator:
     
     def plot_results(self):
         """Create visualizations of the simulation results"""
-        
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        fig, axes = plt.subplots(3, 2, figsize=(14, 15))
         fig.suptitle('Bee Colony Population Dynamics', fontsize=16, fontweight='bold')
-        
+
         days = self.history['day']
-        
+
         # Plot 1: Adult bee population over time
         ax1 = axes[0, 0]
         ax1.plot(days, self.history['adult_bees'], 'b-', linewidth=2)
@@ -185,7 +244,7 @@ class BeeHiveSimulator:
         ax1.set_title('Adult Bee Population')
         ax1.grid(True, alpha=0.3)
         ax1.fill_between(days, self.history['adult_bees'], alpha=0.3)
-        
+
         # Plot 2: Brood population over time
         ax2 = axes[0, 1]
         ax2.plot(days, self.history['total_brood'], 'g-', linewidth=2)
@@ -194,7 +253,7 @@ class BeeHiveSimulator:
         ax2.set_title('Total Brood (Eggs, Larvae, Pupae)')
         ax2.grid(True, alpha=0.3)
         ax2.fill_between(days, self.history['total_brood'], alpha=0.3, color='green')
-        
+
         # Plot 3: Daily egg laying and bee emergence
         ax3 = axes[1, 0]
         ax3.plot(days, self.history['eggs_laid'], 'orange', linewidth=2, label='Eggs Laid')
@@ -204,10 +263,10 @@ class BeeHiveSimulator:
         ax3.set_title('Daily Egg Laying vs Bee Emergence')
         ax3.legend()
         ax3.grid(True, alpha=0.3)
-        
+
         # Plot 4: Net daily change (emerged - died)
         ax4 = axes[1, 1]
-        net_change = [emerged - died for emerged, died in 
+        net_change = [emerged - died for emerged, died in
                      zip(self.history['bees_emerged'], self.history['bees_died'])]
         colors = ['green' if x >= 0 else 'red' for x in net_change]
         ax4.bar(days, net_change, color=colors, alpha=0.6)
@@ -216,15 +275,47 @@ class BeeHiveSimulator:
         ax4.set_ylabel('Net Change in Adult Bees')
         ax4.set_title('Daily Population Change (Emerged - Died)')
         ax4.grid(True, alpha=0.3, axis='y')
-        
+
+        # Plot 5: Brood by developmental stage (stacked area chart)
+        ax5 = axes[2, 0]
+        ax5.stackplot(days,
+                     self.history['eggs'],
+                     self.history['larvae'],
+                     self.history['pupae'],
+                     labels=['Eggs (Days 1-3)', 'Larvae (Days 4-8)', 'Pupae (Days 9-21)'],
+                     colors=['#FFF3B0', '#FFD93D', '#C77D0A'],
+                     alpha=0.7)
+        ax5.set_xlabel('Days')
+        ax5.set_ylabel('Number of Cells')
+        ax5.set_title('Brood Cells by Developmental Stage')
+        ax5.legend(loc='upper left')
+        ax5.grid(True, alpha=0.3)
+
+        # Plot 6: Brood cell occupancy percentage
+        ax6 = axes[2, 1]
+        ax6.plot(days, self.history['brood_occupancy_pct'], 'r-', linewidth=2)
+        ax6.set_xlabel('Days')
+        ax6.set_ylabel('Occupancy (%)')
+        ax6.set_title('Brood Cell Occupancy')
+        ax6.set_ylim(0, 100)
+        ax6.axhline(y=80, color='orange', linestyle='--', linewidth=1, label='80% (High)')
+        ax6.axhline(y=50, color='yellow', linestyle='--', linewidth=1, label='50% (Medium)')
+        ax6.fill_between(days, self.history['brood_occupancy_pct'], alpha=0.3, color='red')
+        ax6.legend(loc='upper left')
+        ax6.grid(True, alpha=0.3)
+
         plt.tight_layout()
         plt.show()
 
 
 # Example usage: Running a typical simulation scenario
 if __name__ == "__main__":
+    print("=" * 60)
+    print("SCENARIO 1: Normal Colony Development")
+    print("=" * 60)
+    
     # Create a simulator with default parameters
-    sim = BeeHiveSimulator(
+    sim1 = BeeHiveSimulator(
         total_frames=10,           # Total frame capacity in brood chamber
         initial_brood_frames=6,    # Starting with 6 frames of brood
         attrition_rate=1000,       # 1000 bees die per day
@@ -240,8 +331,30 @@ if __name__ == "__main__":
         20: 1   # Add 1 frame on day 20
     }
     
-    # Run simulation for 60 days
-    sim.run_simulation(num_days=60, frames_to_add=frame_additions)
+    # Run simulation for 60 days - NO queen loss
+    sim1.run_simulation(num_days=60, frames_to_add=frame_additions)
+    sim1.plot_results()
     
-    # Display the results
-    sim.plot_results()
+    print("\n" + "=" * 60)
+    print("SCENARIO 2: Queen Loss on Day 15")
+    print("=" * 60)
+    
+    # Create another simulator to compare with queen loss
+    sim2 = BeeHiveSimulator(
+        total_frames=10,
+        initial_brood_frames=6,
+        attrition_rate=1000,
+        egg_laying_rate=1100,
+        worker_development_days=21,
+        cells_per_frame=7000
+    )
+    
+    # Run simulation with queen loss on day 15
+    # This models scenarios like: queen killed during inspection, 
+    # failing queen, supersedure, or lost during mating flight
+    sim2.run_simulation(
+        num_days=80, 
+        frames_to_add=frame_additions,
+        queen_loss_day=15  # Queen is lost on day 15
+    )
+    sim2.plot_results()
