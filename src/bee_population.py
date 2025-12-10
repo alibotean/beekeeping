@@ -110,16 +110,41 @@ class BeeHiveSimulator:
 
     def add_frames(self, num_frames):
         """Add frames to the brood chamber (simulates hive expansion)"""
-        self.brood_frames = min(self.brood_frames + num_frames, 
-                                 self.total_frames)
-        print(f"  Added {num_frames} frame(s). Total brood frames: {self.brood_frames}")
+        import json
+
+        old_count = self.brood_frames
+        self.brood_frames = min(self.brood_frames + num_frames, self.total_frames)
+        actual_added = self.brood_frames - old_count
+
+        # Record event (no print)
+        if hasattr(self, 'events'):
+            current_day = len(self.history['day']) if self.history['day'] else 0
+            self.events.append({
+                'day': current_day,
+                'event_type': 'frame_addition',
+                'description': f'Added {actual_added} frame(s). Total: {self.brood_frames}',
+                'details': json.dumps({
+                    'requested': num_frames,
+                    'added': actual_added,
+                    'new_total': self.brood_frames
+                })
+            })
     
     def lose_queen(self, day):
         """Simulate queen loss - colony becomes queenless"""
+        import json
+
         self.has_laying_queen = False
         self.queen_development_day = 0  # Start counting days for emergency queen cells
-        print(f"  Day {day}: QUEEN LOST - Colony is now queenless")
-        print(f"  Emergency queen cells being started from young larvae")
+
+        # Record event (no print)
+        if hasattr(self, 'events'):
+            self.events.append({
+                'day': day,
+                'event_type': 'queen_loss',
+                'description': 'QUEEN LOST - Colony is now queenless',
+                'details': json.dumps({'emergency_cells_started': True})
+            })
     
     def simulate_day(self, day):
         """Simulate one day in the hive"""
@@ -162,13 +187,29 @@ class BeeHiveSimulator:
             
             # Virgin queen emerges after 16 days
             if self.queen_development_day == self.queen_dev_days:
-                print(f"  Day {day}: Virgin queen emerged")
-            
+                # Record event (no print)
+                if hasattr(self, 'events'):
+                    import json
+                    self.events.append({
+                        'day': day,
+                        'event_type': 'queen_emerged',
+                        'description': 'Virgin queen emerged',
+                        'details': json.dumps({'development_day': self.queen_development_day})
+                    })
+
             # Virgin queen mates and starts laying after additional 10 days
             elif self.queen_development_day == self.queen_dev_days + self.queen_mating_days:
                 self.has_laying_queen = True
                 self.queen_development_day = None
-                print(f"  Day {day}: Queen mated and started laying eggs")
+                # Record event (no print)
+                if hasattr(self, 'events'):
+                    import json
+                    self.events.append({
+                        'day': day,
+                        'event_type': 'queen_mated',
+                        'description': 'Queen mated and started laying eggs',
+                        'details': json.dumps({'started_laying': True})
+                    })
         
         # 5. RECORD HISTORY
         eggs, larvae, pupae = self.get_brood_by_stage()
@@ -185,127 +226,129 @@ class BeeHiveSimulator:
     
     def run_simulation(self, num_days, frames_to_add=None, queen_loss_day=None):
         """
-        Run the simulation for specified number of days
-        
-        frames_to_add: dict mapping day number to number of frames to add
-                       e.g., {1: 2, 10: 1, 20: 1}
-        queen_loss_day: day on which the queen is lost (None = no queen loss)
+        Run the simulation for specified number of days.
+
+        Args:
+            num_days: Number of days to simulate
+            frames_to_add: dict mapping day number to number of frames to add
+                           e.g., {1: 2, 10: 1, 20: 1}
+            queen_loss_day: day on which the queen is lost (None = no queen loss)
+
+        Returns:
+            self (for method chaining)
         """
         if frames_to_add is None:
             frames_to_add = {}
-        
-        print(f"\n=== Starting Bee Population Simulation ===")
-        print(f"Initial adult bees: {self.adult_bees:,}")
-        print(f"Initial brood frames: {self.brood_frames}")
-        print(f"Egg laying rate: {self.egg_laying_rate} eggs/day")
-        print(f"Attrition rate: {self.attrition_rate} bees/day")
-        if queen_loss_day is not None:
-            print(f"Queen loss scheduled for day: {queen_loss_day}")
-        print()
-        
+
+        # Store parameters for metadata
+        self._simulation_params = {
+            'num_days': num_days,
+            'frames_to_add': frames_to_add,
+            'queen_loss_day': queen_loss_day
+        }
+
+        # Initialize events tracking
+        if not hasattr(self, 'events'):
+            self.events = []
+
+        # Store initial state for metadata
+        if not hasattr(self, '_initial_adult_bees'):
+            self._initial_adult_bees = self.adult_bees
+            self._initial_brood_frames = self.brood_frames
+            self._initial_has_laying_queen = self.has_laying_queen
+
+        # Main simulation loop
         for day in range(num_days):
             # Check if we should add frames on this day
             if day in frames_to_add:
                 self.add_frames(frames_to_add[day])
-            
+
             # Check if queen is lost on this day
             if queen_loss_day is not None and day == queen_loss_day:
                 self.lose_queen(day)
-            
+
             # Simulate the day
             self.simulate_day(day)
-            
-            # Print status every 10 days
-            if day % 10 == 0:
-                eggs, larvae, pupae = self.get_brood_by_stage()
-                occupancy = self.get_brood_occupancy_percentage()
-                print(f"Day {day:3d}: Adult bees: {self.adult_bees:6,}, "
-                      f"Brood: {self.get_current_brood_count():6,} "
-                      f"(Eggs: {eggs:5,}, Larvae: {larvae:5,}, Pupae: {pupae:5,}), "
-                      f"Occupancy: {occupancy:5.1f}%")
-        
-        print(f"\n=== Simulation Complete ===")
-        print(f"Final adult population: {self.adult_bees:,}")
-        print(f"Final brood count: {self.get_current_brood_count():,}")
-    
-    def plot_results(self):
-        """Create visualizations of the simulation results"""
 
-        fig, axes = plt.subplots(3, 2, figsize=(14, 15))
-        fig.suptitle('Bee Colony Population Dynamics', fontsize=16, fontweight='bold')
+        return self  # Allow method chaining
 
-        days = self.history['day']
+    def to_dataframes(self):
+        """
+        Convert simulation results to structured pandas DataFrames.
 
-        # Plot 1: Adult bee population over time
-        ax1 = axes[0, 0]
-        ax1.plot(days, self.history['adult_bees'], 'b-', linewidth=2)
-        ax1.set_xlabel('Days')
-        ax1.set_ylabel('Adult Bees')
-        ax1.set_title('Adult Bee Population')
-        ax1.grid(True, alpha=0.3)
-        ax1.fill_between(days, self.history['adult_bees'], alpha=0.3)
+        Returns:
+            Dictionary containing:
+            - 'population': DataFrame with adult_bees, brood stages, occupancy
+            - 'dynamics': DataFrame with daily changes and rates
+            - 'events': DataFrame with discrete events
+            - 'metadata': Dict with configuration and parameters
+        """
+        import pandas as pd
+        import json
 
-        # Plot 2: Brood population over time
-        ax2 = axes[0, 1]
-        ax2.plot(days, self.history['total_brood'], 'g-', linewidth=2)
-        ax2.set_xlabel('Days')
-        ax2.set_ylabel('Developing Brood')
-        ax2.set_title('Total Brood (Eggs, Larvae, Pupae)')
-        ax2.grid(True, alpha=0.3)
-        ax2.fill_between(days, self.history['total_brood'], alpha=0.3, color='green')
+        # Handle empty simulation
+        if not self.history['day']:
+            return {
+                'population': pd.DataFrame(columns=['day', 'adult_bees', 'total_brood', 'eggs', 'larvae', 'pupae', 'brood_occupancy_pct']),
+                'dynamics': pd.DataFrame(columns=['day', 'eggs_laid', 'bees_emerged', 'bees_died', 'net_change', 'egg_laying_rate', 'attrition_rate']),
+                'events': pd.DataFrame(columns=['day', 'event_type', 'description', 'details']),
+                'metadata': self._build_metadata()
+            }
 
-        # Plot 3: Daily egg laying and bee emergence
-        ax3 = axes[1, 0]
-        ax3.plot(days, self.history['eggs_laid'], 'orange', linewidth=2, label='Eggs Laid')
-        ax3.plot(days, self.history['bees_emerged'], 'purple', linewidth=2, label='Bees Emerged')
-        ax3.set_xlabel('Days')
-        ax3.set_ylabel('Number of Bees')
-        ax3.set_title('Daily Egg Laying vs Bee Emergence')
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
+        # Population DataFrame
+        population = pd.DataFrame({
+            'day': self.history['day'],
+            'adult_bees': self.history['adult_bees'],
+            'total_brood': self.history['total_brood'],
+            'eggs': self.history['eggs'],
+            'larvae': self.history['larvae'],
+            'pupae': self.history['pupae'],
+            'brood_occupancy_pct': self.history['brood_occupancy_pct']
+        }).set_index('day')
 
-        # Plot 4: Net daily change (emerged - died)
-        ax4 = axes[1, 1]
-        net_change = [emerged - died for emerged, died in
-                     zip(self.history['bees_emerged'], self.history['bees_died'])]
-        colors = ['green' if x >= 0 else 'red' for x in net_change]
-        ax4.bar(days, net_change, color=colors, alpha=0.6)
-        ax4.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
-        ax4.set_xlabel('Days')
-        ax4.set_ylabel('Net Change in Adult Bees')
-        ax4.set_title('Daily Population Change (Emerged - Died)')
-        ax4.grid(True, alpha=0.3, axis='y')
+        # Dynamics DataFrame
+        dynamics = pd.DataFrame({
+            'day': self.history['day'],
+            'eggs_laid': self.history['eggs_laid'],
+            'bees_emerged': self.history['bees_emerged'],
+            'bees_died': self.history['bees_died'],
+            'egg_laying_rate': [self.egg_laying_rate] * len(self.history['day']),
+            'attrition_rate': [self.attrition_rate] * len(self.history['day'])
+        }).set_index('day')
+        dynamics['net_change'] = dynamics['bees_emerged'] - dynamics['bees_died']
 
-        # Plot 5: Brood by developmental stage (stacked area chart)
-        ax5 = axes[2, 0]
-        ax5.stackplot(days,
-                     self.history['eggs'],
-                     self.history['larvae'],
-                     self.history['pupae'],
-                     labels=['Eggs (Days 1-3)', 'Larvae (Days 4-8)', 'Pupae (Days 9-21)'],
-                     colors=['#FFF3B0', '#FFD93D', '#C77D0A'],
-                     alpha=0.7)
-        ax5.set_xlabel('Days')
-        ax5.set_ylabel('Number of Cells')
-        ax5.set_title('Brood Cells by Developmental Stage')
-        ax5.legend(loc='upper left')
-        ax5.grid(True, alpha=0.3)
+        # Events DataFrame
+        events = pd.DataFrame(self.events if hasattr(self, 'events') else [])
 
-        # Plot 6: Brood cell occupancy percentage
-        ax6 = axes[2, 1]
-        ax6.plot(days, self.history['brood_occupancy_pct'], 'r-', linewidth=2)
-        ax6.set_xlabel('Days')
-        ax6.set_ylabel('Occupancy (%)')
-        ax6.set_title('Brood Cell Occupancy')
-        ax6.set_ylim(0, 100)
-        ax6.axhline(y=80, color='orange', linestyle='--', linewidth=1, label='80% (High)')
-        ax6.axhline(y=50, color='yellow', linestyle='--', linewidth=1, label='50% (Medium)')
-        ax6.fill_between(days, self.history['brood_occupancy_pct'], alpha=0.3, color='red')
-        ax6.legend(loc='upper left')
-        ax6.grid(True, alpha=0.3)
+        return {
+            'population': population,
+            'dynamics': dynamics,
+            'events': events,
+            'metadata': self._build_metadata()
+        }
 
-        plt.tight_layout()
-        plt.show()
+    def _build_metadata(self):
+        """Build metadata dictionary from instance variables."""
+        return {
+            'simulator_type': self.__class__.__name__,
+            'simulation_config': {
+                'total_frames': self.total_frames,
+                'initial_brood_frames': getattr(self, '_initial_brood_frames', self.brood_frames),
+                'cells_per_frame': self.cells_per_frame,
+                'worker_development_days': self.worker_dev_days,
+                'queen_development_days': self.queen_dev_days,
+                'queen_mating_days': self.queen_mating_days,
+            },
+            'base_rates': {
+                'egg_laying_rate': self.egg_laying_rate,
+                'attrition_rate': self.attrition_rate,
+            },
+            'initial_state': {
+                'adult_bees': getattr(self, '_initial_adult_bees', self.adult_bees),
+                'has_laying_queen': getattr(self, '_initial_has_laying_queen', self.has_laying_queen),
+            },
+            'simulation_parameters': getattr(self, '_simulation_params', {})
+        }
 
 
 # Example usage: Running a typical simulation scenario

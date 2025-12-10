@@ -14,6 +14,8 @@ Run this script to see:
 from seasonal_bee_simulator import SeasonalBeeSimulator
 from bee_population import BeeHiveSimulator
 from maramures_calendar import BAIA_MARE_CALENDAR, CHIUZBAIA_CALENDAR, date_to_day_of_year
+from simulation_reporter import SimulationReporter
+from simulation_plotter import SimulationPlotter
 import matplotlib.pyplot as plt
 
 
@@ -46,13 +48,15 @@ def scenario_1_full_year():
     )
 
     # Run for 270 days (approximately 9 months)
-    sim.run_simulation(num_days=270)
+    results = sim.run_simulation(num_days=270).to_dataframes()
 
     # Print summary
-    sim.print_seasonal_summary()
+    reporter = SimulationReporter(results)
+    reporter.print_summary()
 
     # Show plots
-    sim.plot_results()
+    plotter = SimulationPlotter(results)
+    plotter.plot_all()
 
 
 def scenario_2_comparison():
@@ -82,7 +86,7 @@ def scenario_2_comparison():
         total_frames=10,
         initial_brood_frames=6
     )
-    seasonal_sim.run_simulation(num_days=120)
+    seasonal_results = seasonal_sim.run_simulation(num_days=120).to_dataframes()
 
     # Fixed-rate simulator (for comparison)
     print("\n--- Running Fixed-Rate Simulator ---")
@@ -92,19 +96,19 @@ def scenario_2_comparison():
         total_frames=10,
         initial_brood_frames=6
     )
-    fixed_sim.run_simulation(num_days=120)
+    fixed_results = fixed_sim.run_simulation(num_days=120).to_dataframes()
 
     # Create comparison plot
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle('Seasonal vs Fixed-Rate Simulator Comparison', fontsize=16, fontweight='bold')
 
-    days = seasonal_sim.history['day']
-    dates = seasonal_sim.history['calendar_date']
+    days = seasonal_results['population'].index.values
+    dates = seasonal_results['calendar']['calendar_date'].values
 
     # Adult population comparison
     ax1 = axes[0, 0]
-    ax1.plot(days, seasonal_sim.history['adult_bees'], 'b-', linewidth=2, label='Seasonal')
-    ax1.plot(days, fixed_sim.history['adult_bees'], 'r--', linewidth=2, label='Fixed-Rate')
+    ax1.plot(days, seasonal_results['population']['adult_bees'], 'b-', linewidth=2, label='Seasonal')
+    ax1.plot(days, fixed_results['population']['adult_bees'], 'r--', linewidth=2, label='Fixed-Rate')
     ax1.set_xlabel('Days')
     ax1.set_ylabel('Adult Bees')
     ax1.set_title('Adult Bee Population Comparison')
@@ -113,8 +117,8 @@ def scenario_2_comparison():
 
     # Brood comparison
     ax2 = axes[0, 1]
-    ax2.plot(days, seasonal_sim.history['total_brood'], 'g-', linewidth=2, label='Seasonal')
-    ax2.plot(days, fixed_sim.history['total_brood'], 'orange', linestyle='--',
+    ax2.plot(days, seasonal_results['population']['total_brood'], 'g-', linewidth=2, label='Seasonal')
+    ax2.plot(days, fixed_results['population']['total_brood'], 'orange', linestyle='--',
             linewidth=2, label='Fixed-Rate')
     ax2.set_xlabel('Days')
     ax2.set_ylabel('Total Brood')
@@ -124,7 +128,7 @@ def scenario_2_comparison():
 
     # Seasonal egg laying rate
     ax3 = axes[1, 0]
-    ax3.plot(days, seasonal_sim.history['effective_egg_rate'], 'purple', linewidth=2)
+    ax3.plot(days, seasonal_results['calendar']['effective_egg_rate'], 'purple', linewidth=2)
     ax3.axhline(y=1100, color='red', linestyle='--', linewidth=2, label='Fixed Rate (1100)')
     ax3.set_xlabel('Days')
     ax3.set_ylabel('Eggs Laid per Day')
@@ -134,9 +138,9 @@ def scenario_2_comparison():
 
     # Forage availability
     ax4 = axes[1, 1]
-    ax4.plot(days, seasonal_sim.history['nectar_availability'], 'gold',
+    ax4.plot(days, seasonal_results['calendar']['nectar_availability'], 'gold',
             linewidth=2, label='Nectar', alpha=0.8)
-    ax4.plot(days, seasonal_sim.history['pollen_availability'], 'brown',
+    ax4.plot(days, seasonal_results['calendar']['pollen_availability'], 'brown',
             linewidth=2, label='Pollen', alpha=0.8)
     ax4.set_xlabel('Days')
     ax4.set_ylabel('Availability (0-1)')
@@ -150,9 +154,11 @@ def scenario_2_comparison():
 
     # Print comparison summary
     print("\n=== Comparison Summary ===")
-    print(f"Seasonal simulator final population: {seasonal_sim.adult_bees:,} bees")
-    print(f"Fixed-rate simulator final population: {fixed_sim.adult_bees:,} bees")
-    print(f"Difference: {seasonal_sim.adult_bees - fixed_sim.adult_bees:+,} bees")
+    final_seasonal = seasonal_results['population'].iloc[-1]['adult_bees']
+    final_fixed = fixed_results['population'].iloc[-1]['adult_bees']
+    print(f"Seasonal simulator final population: {int(final_seasonal):,} bees")
+    print(f"Fixed-rate simulator final population: {int(final_fixed):,} bees")
+    print(f"Difference: {int(final_seasonal - final_fixed):+,} bees")
 
 
 def scenario_3_key_dates():
@@ -240,13 +246,15 @@ def scenario_4_spring_buildup():
     )
 
     # Simulate 100 days (Feb 20 - May 31)
-    sim.run_simulation(num_days=100)
+    results = sim.run_simulation(num_days=100).to_dataframes()
 
     # Print summary
-    sim.print_seasonal_summary()
+    reporter = SimulationReporter(results)
+    reporter.print_summary()
 
     # Plot results
-    sim.plot_results()
+    plotter = SimulationPlotter(results)
+    plotter.plot_all()
 
     print("\nSpring Buildup Notes:")
     print("- Population should grow rapidly during Plum and Acacia flows")
@@ -287,13 +295,15 @@ def scenario_5_chiuzbaia_full_season():
     )
 
     # Run for 270 days (approximately 9 months)
-    sim.run_simulation(num_days=270)
+    results = sim.run_simulation(num_days=270).to_dataframes()
 
     # Print summary
-    sim.print_seasonal_summary()
+    reporter = SimulationReporter(results)
+    reporter.print_summary()
 
     # Show plots
-    sim.plot_results()
+    plotter = SimulationPlotter(results)
+    plotter.plot_all()
 
 
 def scenario_6_location_comparison():
@@ -324,7 +334,7 @@ def scenario_6_location_comparison():
         total_frames=10,
         initial_brood_frames=6
     )
-    bm_sim.run_simulation(num_days=200)  # Mar 1 - Sep 17
+    bm_results = bm_sim.run_simulation(num_days=200).to_dataframes()  # Mar 1 - Sep 17
 
     # Chiuzbaia simulation
     print("\n--- Running Chiuzbaia Simulation (575m altitude) ---")
@@ -336,19 +346,19 @@ def scenario_6_location_comparison():
         total_frames=10,
         initial_brood_frames=6
     )
-    ch_sim.run_simulation(num_days=200)  # Mar 1 - Sep 17
+    ch_results = ch_sim.run_simulation(num_days=200).to_dataframes()  # Mar 1 - Sep 17
 
     # Create comparison visualization
     fig, axes = plt.subplots(3, 2, figsize=(16, 14))
     fig.suptitle('Location Comparison: Baia Mare (220m) vs Chiuzbaia (575m)',
                  fontsize=16, fontweight='bold')
 
-    days = bm_sim.history['day']
+    days = bm_results['population'].index.values
 
     # Adult population comparison
     ax1 = axes[0, 0]
-    ax1.plot(days, bm_sim.history['adult_bees'], 'b-', linewidth=2, label='Baia Mare')
-    ax1.plot(days, ch_sim.history['adult_bees'], 'g-', linewidth=2, label='Chiuzbaia')
+    ax1.plot(days, bm_results['population']['adult_bees'], 'b-', linewidth=2, label='Baia Mare')
+    ax1.plot(days, ch_results['population']['adult_bees'], 'g-', linewidth=2, label='Chiuzbaia')
     ax1.set_xlabel('Days')
     ax1.set_ylabel('Adult Bees')
     ax1.set_title('Adult Population Comparison')
@@ -357,8 +367,8 @@ def scenario_6_location_comparison():
 
     # Brood comparison
     ax2 = axes[0, 1]
-    ax2.plot(days, bm_sim.history['total_brood'], 'b-', linewidth=2, label='Baia Mare')
-    ax2.plot(days, ch_sim.history['total_brood'], 'g-', linewidth=2, label='Chiuzbaia')
+    ax2.plot(days, bm_results['population']['total_brood'], 'b-', linewidth=2, label='Baia Mare')
+    ax2.plot(days, ch_results['population']['total_brood'], 'g-', linewidth=2, label='Chiuzbaia')
     ax2.set_xlabel('Days')
     ax2.set_ylabel('Total Brood')
     ax2.set_title('Brood Population Comparison')
@@ -367,8 +377,8 @@ def scenario_6_location_comparison():
 
     # Egg laying rate comparison
     ax3 = axes[1, 0]
-    ax3.plot(days, bm_sim.history['effective_egg_rate'], 'b-', linewidth=2, label='Baia Mare')
-    ax3.plot(days, ch_sim.history['effective_egg_rate'], 'g-', linewidth=2, label='Chiuzbaia')
+    ax3.plot(days, bm_results['calendar']['effective_egg_rate'], 'b-', linewidth=2, label='Baia Mare')
+    ax3.plot(days, ch_results['calendar']['effective_egg_rate'], 'g-', linewidth=2, label='Chiuzbaia')
     ax3.set_xlabel('Days')
     ax3.set_ylabel('Eggs per Day')
     ax3.set_title('Egg Laying Rate Comparison')
@@ -377,8 +387,8 @@ def scenario_6_location_comparison():
 
     # Attrition rate comparison
     ax4 = axes[1, 1]
-    ax4.plot(days, bm_sim.history['effective_attrition'], 'b-', linewidth=2, label='Baia Mare')
-    ax4.plot(days, ch_sim.history['effective_attrition'], 'g-', linewidth=2, label='Chiuzbaia')
+    ax4.plot(days, bm_results['calendar']['effective_attrition'], 'b-', linewidth=2, label='Baia Mare')
+    ax4.plot(days, ch_results['calendar']['effective_attrition'], 'g-', linewidth=2, label='Chiuzbaia')
     ax4.set_xlabel('Days')
     ax4.set_ylabel('Deaths per Day')
     ax4.set_title('Attrition Rate Comparison')
@@ -387,8 +397,8 @@ def scenario_6_location_comparison():
 
     # Nectar availability comparison
     ax5 = axes[2, 0]
-    ax5.plot(days, bm_sim.history['nectar_availability'], 'b-', linewidth=2, label='Baia Mare')
-    ax5.plot(days, ch_sim.history['nectar_availability'], 'g-', linewidth=2, label='Chiuzbaia')
+    ax5.plot(days, bm_results['calendar']['nectar_availability'], 'b-', linewidth=2, label='Baia Mare')
+    ax5.plot(days, ch_results['calendar']['nectar_availability'], 'g-', linewidth=2, label='Chiuzbaia')
     ax5.set_xlabel('Days')
     ax5.set_ylabel('Nectar Availability (0-1)')
     ax5.set_title('Nectar Flow Comparison')
@@ -398,7 +408,7 @@ def scenario_6_location_comparison():
 
     # Population difference
     ax6 = axes[2, 1]
-    pop_diff = [ch - bm for ch, bm in zip(ch_sim.history['adult_bees'], bm_sim.history['adult_bees'])]
+    pop_diff = ch_results['population']['adult_bees'].values - bm_results['population']['adult_bees'].values
     colors = ['green' if x >= 0 else 'red' for x in pop_diff]
     ax6.bar(days, pop_diff, color=colors, alpha=0.6)
     ax6.axhline(y=0, color='black', linestyle='-', linewidth=1)
@@ -413,14 +423,14 @@ def scenario_6_location_comparison():
     # Print summary comparison
     print("\n=== Location Comparison Summary ===")
     print(f"\nBaia Mare (220m):")
-    print(f"  Peak population: {max(bm_sim.history['adult_bees']):,} bees")
-    print(f"  Final population: {bm_sim.adult_bees:,} bees")
-    print(f"  Peak egg rate: {max(bm_sim.history['effective_egg_rate'])} eggs/day")
+    print(f"  Peak population: {int(bm_results['population']['adult_bees'].max()):,} bees")
+    print(f"  Final population: {int(bm_results['population'].iloc[-1]['adult_bees']):,} bees")
+    print(f"  Peak egg rate: {int(bm_results['calendar']['effective_egg_rate'].max())} eggs/day")
 
     print(f"\nChiuzbaia (575m):")
-    print(f"  Peak population: {max(ch_sim.history['adult_bees']):,} bees")
-    print(f"  Final population: {ch_sim.adult_bees:,} bees")
-    print(f"  Peak egg rate: {max(ch_sim.history['effective_egg_rate'])} eggs/day")
+    print(f"  Peak population: {int(ch_results['population']['adult_bees'].max()):,} bees")
+    print(f"  Final population: {int(ch_results['population'].iloc[-1]['adult_bees']):,} bees")
+    print(f"  Peak egg rate: {int(ch_results['calendar']['effective_egg_rate'].max())} eggs/day")
 
     print(f"\n✓ Phenological offset demonstrates 'vertical migration' advantage")
     print(f"✓ Chiuzbaia Raspberry flow fills Baia Mare's May Gap")
@@ -459,11 +469,11 @@ def scenario_7_pastoral_movement_strategy():
         total_frames=10,
         initial_brood_frames=6
     )
-    bm_sim.run_simulation(num_days=80)  # 80 days = Mar 1 to May 20
+    bm_results = bm_sim.run_simulation(num_days=80).to_dataframes()  # 80 days = Mar 1 to May 20
 
     print(f"\nBaia Mare Result (May 20):")
-    print(f"  Adult bees: {bm_sim.adult_bees:,}")
-    print(f"  Total brood: {bm_sim.get_current_brood_count():,}")
+    print(f"  Adult bees: {int(bm_results['population'].iloc[-1]['adult_bees']):,}")
+    print(f"  Total brood: {int(bm_results['population'].iloc[-1]['total_brood']):,}")
     print(f"  Status: Strong colony ready for Raspberry flow")
 
     print("\n\nPhase 2: Summer Production in Chiuzbaia (May 25 - Sep 15)")
@@ -480,11 +490,11 @@ def scenario_7_pastoral_movement_strategy():
         total_frames=10,
         initial_brood_frames=8  # More frames after spring expansion
     )
-    ch_sim.run_simulation(num_days=113)  # May 25 - Sep 15
+    ch_results = ch_sim.run_simulation(num_days=113).to_dataframes()  # May 25 - Sep 15
 
     print(f"\nChiuzbaia Result (Sep 15):")
-    print(f"  Adult bees: {ch_sim.adult_bees:,}")
-    print(f"  Total brood: {ch_sim.get_current_brood_count():,}")
+    print(f"  Adult bees: {int(ch_results['population'].iloc[-1]['adult_bees']):,}")
+    print(f"  Total brood: {int(ch_results['population'].iloc[-1]['total_brood']):,}")
     print(f"  Status: Summer harvest complete")
 
     print("\n=== Pastoral Movement Strategy Summary ===")

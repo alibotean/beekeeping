@@ -284,337 +284,106 @@ class SeasonalBeeSimulator(BeeHiveSimulator):
         # Increment day of year (wrap at 365)
         self.current_day_of_year = (self.current_day_of_year % 365) + 1
 
+    def to_dataframes(self):
+        """
+        Convert simulation results to structured pandas DataFrames (seasonal extension).
+
+        Extends the base method to include calendar and resource DataFrames.
+
+        Returns:
+            Dictionary containing:
+            - 'population': DataFrame with adult_bees, brood stages, occupancy
+            - 'dynamics': DataFrame with daily changes and rates
+            - 'events': DataFrame with discrete events
+            - 'calendar': DataFrame with seasonal flow data
+            - 'resources': DataFrame with honey tracking
+            - 'metadata': Dict with configuration and parameters
+        """
+        import pandas as pd
+        import json
+
+        # Get base DataFrames from parent class
+        results = super().to_dataframes()
+
+        # Handle empty simulation
+        if not self.history['day']:
+            results['calendar'] = pd.DataFrame(columns=['day', 'calendar_date', 'day_of_year', 'active_flows',
+                                                        'nectar_availability', 'pollen_availability',
+                                                        'egg_rate_modifier', 'attrition_modifier',
+                                                        'effective_egg_rate', 'effective_attrition'])
+            results['resources'] = pd.DataFrame(columns=['day', 'honey_stores', 'daily_honey_production',
+                                                         'daily_honey_consumption', 'net_honey_change',
+                                                         'supering_recommendation'])
+            # Add calendar info to metadata
+            results['metadata']['calendar_info'] = {
+                'location_name': getattr(self.calendar, 'name', 'Unknown'),
+                'start_date': self.start_date,
+                'base_egg_laying_rate': self.base_egg_laying_rate,
+                'base_attrition_rate': self.base_attrition_rate
+            }
+            return results
+
+        # Add calendar DataFrame
+        # Reconstruct day_of_year for each day
+        start_doy = self._date_to_day_of_year(self.start_date)
+        days_of_year = [(start_doy + i - 1) % 365 + 1 for i in range(len(self.history['day']))]
+
+        # Calculate modifiers from effective rates
+        egg_rate_modifiers = []
+        attrition_modifiers = []
+        for eff_egg, eff_attr in zip(self.history['effective_egg_rate'], self.history['effective_attrition']):
+            egg_mod = eff_egg / self.base_egg_laying_rate if self.base_egg_laying_rate > 0 else 0
+            attr_mod = eff_attr / self.base_attrition_rate if self.base_attrition_rate > 0 else 0
+            egg_rate_modifiers.append(egg_mod)
+            attrition_modifiers.append(attr_mod)
+
+        results['calendar'] = pd.DataFrame({
+            'day': self.history['day'],
+            'calendar_date': self.history['calendar_date'],
+            'day_of_year': days_of_year,
+            'active_flows': [json.dumps(flows) for flows in self.history['active_flows']],
+            'nectar_availability': self.history['nectar_availability'],
+            'pollen_availability': self.history['pollen_availability'],
+            'egg_rate_modifier': egg_rate_modifiers,
+            'attrition_modifier': attrition_modifiers,
+            'effective_egg_rate': self.history['effective_egg_rate'],
+            'effective_attrition': self.history['effective_attrition']
+        }).set_index('day')
+
+        # Add resources DataFrame
+        results['resources'] = pd.DataFrame({
+            'day': self.history['day'],
+            'honey_stores': self.history['honey_stores'],
+            'daily_honey_production': self.history['daily_honey_production'],
+            'daily_honey_consumption': self.history['daily_honey_consumption'],
+            'net_honey_change': self.history['net_honey_change'],
+            'supering_recommendation': self.history['supering_recommendations']
+        }).set_index('day')
+
+        # Add seasonal metadata
+        results['metadata']['calendar_info'] = {
+            'location_name': getattr(self.calendar, 'name', 'Unknown'),
+            'start_date': self.start_date,
+            'base_egg_laying_rate': self.base_egg_laying_rate,
+            'base_attrition_rate': self.base_attrition_rate
+        }
+
+        return results
+
     def run_simulation(self, num_days: int, frames_to_add: dict = None, queen_loss_day: int = None):
         """
         Run the simulation with seasonal calendar integration.
-
-        This overrides the parent's run_simulation to provide calendar-aware
-        status messages.
 
         Args:
             num_days: Number of days to simulate
             frames_to_add: Dict mapping day number to number of frames to add
             queen_loss_day: Day on which the queen is lost (None = no queen loss)
+
+        Returns:
+            self (for method chaining)
         """
-        if frames_to_add is None:
-            frames_to_add = {}
-
-        start_date_str = self.calendar.day_of_year_to_date_string(
-            self._date_to_day_of_year(self.start_date)
-        )
-
-        print(f"\n=== Seasonal Bee Population Simulation ===")
-        print(f"Location: {self.calendar.location_name}")
-        print(f"Start date: {start_date_str} (Day of year: {self._date_to_day_of_year(self.start_date)})")
-        print(f"Simulation duration: {num_days} days")
-        print(f"Initial adult bees: {self.adult_bees:,}")
-        print(f"Initial brood frames: {self.brood_frames}")
-        print(f"Base egg laying rate: {self.base_egg_laying_rate} eggs/day (modulated by calendar)")
-        print(f"Base attrition rate: {self.base_attrition_rate} bees/day (modulated by calendar)")
-        if queen_loss_day is not None:
-            print(f"Queen loss scheduled for day: {queen_loss_day}")
-        print()
-
-        for day in range(num_days):
-            # Check if we should add frames on this day
-            if day in frames_to_add:
-                self.add_frames(frames_to_add[day])
-
-            # Check if queen is lost on this day
-            if queen_loss_day is not None and day == queen_loss_day:
-                self.lose_queen(day)
-
-            # Simulate the day
-            self.simulate_day(day)
-
-            # Check for supering recommendations
-            if self.history['supering_recommendations'][-1]:
-                print(f"\n  🍯 Day {day} ({self.history['calendar_date'][-1]}): {self.history['supering_recommendations'][-1]}")
-                print(f"     Honey stores: {self.honey_stores:.1f} kg\n")
-
-            # Print status every 30 days (monthly update)
-            if day % 30 == 0:
-                eggs, larvae, pupae = self.get_brood_by_stage()
-                occupancy = self.get_brood_occupancy_percentage()
-                date_str = self.history['calendar_date'][-1]
-                active_flows = self.history['active_flows'][-1]
-
-                print(f"Day {day:3d} ({date_str}): Adult bees: {self.adult_bees:6,}, "
-                      f"Brood: {self.get_current_brood_count():6,}, "
-                      f"Occupancy: {occupancy:5.1f}%, Honey: {self.honey_stores:5.1f} kg")
-                if active_flows:
-                    print(f"           Active flows: {', '.join(active_flows[:3])}")
-
-        print(f"\n=== Simulation Complete ===")
-        print(f"Final adult population: {self.adult_bees:,}")
-        print(f"Final brood count: {self.get_current_brood_count():,}")
-        print(f"Final date: {self.history['calendar_date'][-1]}")
-
-    def plot_results(self):
-        """
-        Create enhanced visualizations with seasonal flow overlays.
-
-        This extends the parent's plot_results to include:
-        - Calendar dates on x-axis
-        - Vertical bands showing major flow periods
-        - Additional panel showing effective rates over time
-        - Seasonal context annotations
-        """
-        fig, axes = plt.subplots(4, 2, figsize=(16, 18))
-        fig.suptitle(f'Seasonal Bee Colony Dynamics - {self.calendar.location_name}',
-                     fontsize=16, fontweight='bold')
-
-        days = self.history['day']
-        dates = self.history['calendar_date']
-
-        # Determine x-axis tick positions (show every 30 days)
-        tick_indices = list(range(0, len(days), 30))
-        if len(days) - 1 not in tick_indices:
-            tick_indices.append(len(days) - 1)
-
-        # Plot 1: Adult bee population over time
-        ax1 = axes[0, 0]
-        ax1.plot(days, self.history['adult_bees'], 'b-', linewidth=2)
-        ax1.set_xlabel('Days')
-        ax1.set_ylabel('Adult Bees')
-        ax1.set_title('Adult Bee Population')
-        ax1.grid(True, alpha=0.3)
-        ax1.fill_between(days, self.history['adult_bees'], alpha=0.3)
-        ax1.set_xticks([days[i] for i in tick_indices])
-        ax1.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
-
-        # Plot 2: Brood population over time
-        ax2 = axes[0, 1]
-        ax2.plot(days, self.history['total_brood'], 'g-', linewidth=2)
-        ax2.set_xlabel('Days')
-        ax2.set_ylabel('Developing Brood')
-        ax2.set_title('Total Brood (Eggs, Larvae, Pupae)')
-        ax2.grid(True, alpha=0.3)
-        ax2.fill_between(days, self.history['total_brood'], alpha=0.3, color='green')
-        ax2.set_xticks([days[i] for i in tick_indices])
-        ax2.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
-
-        # Plot 3: Effective egg laying and attrition rates
-        ax3 = axes[1, 0]
-        ax3.plot(days, self.history['effective_egg_rate'], 'orange',
-                linewidth=2, label='Egg Laying Rate')
-        ax3.plot(days, self.history['effective_attrition'], 'red',
-                linewidth=2, label='Attrition Rate')
-        ax3.set_xlabel('Days')
-        ax3.set_ylabel('Bees per Day')
-        ax3.set_title('Calendar-Modulated Rates')
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-        ax3.set_xticks([days[i] for i in tick_indices])
-        ax3.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
-
-        # Plot 4: Net daily change (emerged - died)
-        ax4 = axes[1, 1]
-        net_change = [emerged - died for emerged, died in
-                     zip(self.history['bees_emerged'], self.history['bees_died'])]
-        colors = ['green' if x >= 0 else 'red' for x in net_change]
-        ax4.bar(days, net_change, color=colors, alpha=0.6)
-        ax4.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
-        ax4.set_xlabel('Days')
-        ax4.set_ylabel('Net Change in Adult Bees')
-        ax4.set_title('Daily Population Change (Emerged - Died)')
-        ax4.grid(True, alpha=0.3, axis='y')
-        ax4.set_xticks([days[i] for i in tick_indices])
-        ax4.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
-
-        # Plot 5: Nectar and pollen availability
-        ax5 = axes[2, 0]
-        ax5.plot(days, self.history['nectar_availability'], 'gold',
-                linewidth=2, label='Nectar', alpha=0.8)
-        ax5.plot(days, self.history['pollen_availability'], 'brown',
-                linewidth=2, label='Pollen', alpha=0.8)
-        ax5.set_xlabel('Days')
-        ax5.set_ylabel('Availability (0-1)')
-        ax5.set_title('Seasonal Forage Availability')
-        ax5.set_ylim(-0.05, 1.05)
-        ax5.legend()
-        ax5.grid(True, alpha=0.3)
-        ax5.set_xticks([days[i] for i in tick_indices])
-        ax5.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
-
-        # Plot 6: Honey stores with supering recommendations
-        ax6 = axes[2, 1]
-        ax6.plot(days, self.history['honey_stores'], 'gold', linewidth=2.5, label='Honey Stores')
-        ax6.fill_between(days, self.history['honey_stores'], alpha=0.3, color='gold')
-
-        # Mark supering recommendations
-        super_days = [i for i, rec in enumerate(self.history['supering_recommendations']) if rec]
-        if super_days:
-            super_stores = [self.history['honey_stores'][i] for i in super_days]
-            ax6.scatter([days[i] for i in super_days], super_stores,
-                       c='red', s=100, marker='^', zorder=5, label='ADD SUPER HERE')
-
-        # Reference lines
-        ax6.axhline(y=8, color='orange', linestyle='--', linewidth=1, label='Min for supering (8kg)')
-        ax6.axhline(y=15, color='green', linestyle='--', linewidth=1, label='Good reserves (15kg)')
-
-        ax6.set_xlabel('Days')
-        ax6.set_ylabel('Honey Stores (kg)')
-        ax6.set_title('Honey Stores & Supering Recommendations')
-        ax6.legend(loc='upper left', fontsize=8)
-        ax6.grid(True, alpha=0.3)
-        ax6.set_xticks([days[i] for i in tick_indices])
-        ax6.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
-
-        # Plot 7: Honey production vs consumption
-        ax7 = axes[3, 0]
-        ax7.plot(days, self.history['daily_honey_production'], 'green',
-                linewidth=2, alpha=0.7, label='Production')
-        ax7.plot(days, self.history['daily_honey_consumption'], 'red',
-                linewidth=2, alpha=0.7, label='Consumption')
-        ax7.fill_between(days, self.history['daily_honey_production'],
-                        alpha=0.2, color='green')
-        ax7.fill_between(days, self.history['daily_honey_consumption'],
-                        alpha=0.2, color='red')
-        ax7.set_xlabel('Days')
-        ax7.set_ylabel('Honey (kg/day)')
-        ax7.set_title('Daily Honey Production vs Consumption')
-        ax7.legend()
-        ax7.grid(True, alpha=0.3)
-        ax7.set_xticks([days[i] for i in tick_indices])
-        ax7.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
-
-        # Plot 8: Brood cell occupancy percentage with detailed breakdown
-        ax8 = axes[3, 1]
-
-        # Main line and fill
-        line, = ax8.plot(days, self.history['brood_occupancy_pct'], 'r-', linewidth=2, label='Occupancy')
-        ax8.fill_between(days, self.history['brood_occupancy_pct'], alpha=0.3, color='red')
-
-        # Add scatter points every 5 days for tooltip targets
-        sample_indices = list(range(0, len(days), 5))
-        scatter = ax8.scatter([days[i] for i in sample_indices],
-                             [self.history['brood_occupancy_pct'][i] for i in sample_indices],
-                             c='darkred', s=30, alpha=0.6, zorder=5)
-
-        # Reference lines
-        ax8.axhline(y=80, color='orange', linestyle='--', linewidth=1, label='80% (High)')
-        ax8.axhline(y=50, color='yellow', linestyle='--', linewidth=1, label='50% (Medium)')
-        ax8.axhline(y=70, color='red', linestyle=':', linewidth=1, label='70% (Super threshold)')
-
-        ax8.set_xlabel('Days')
-        ax8.set_ylabel('Occupancy (%)')
-        ax8.set_title('Brood Cell Occupancy (hover over points for details)')
-        ax8.set_ylim(0, 100)
-        ax8.legend(loc='upper left', fontsize=8)
-        ax8.grid(True, alpha=0.3)
-        ax8.set_xticks([days[i] for i in tick_indices])
-        ax8.set_xticklabels([dates[i] for i in tick_indices], rotation=45, ha='right')
-
-        # Create annotation for tooltip
-        annot = ax8.annotate("", xy=(0, 0), xytext=(15, 15),
-                            textcoords="offset points",
-                            bbox=dict(boxstyle="round,pad=0.5", fc="yellow", alpha=0.9),
-                            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0"),
-                            fontsize=8, visible=False, zorder=10)
-
-        # Hover event handler
-        def hover(event):
-            if event.inaxes == ax8:
-                # Check if mouse is near any scatter point
-                cont, ind = scatter.contains(event)
-                if cont:
-                    # Get the index of the closest point
-                    idx = sample_indices[ind["ind"][0]]
-
-                    # Get data for this day
-                    date = dates[idx]
-                    eggs = self.history['eggs'][idx]
-                    larvae = self.history['larvae'][idx]
-                    pupae = self.history['pupae'][idx]
-                    total = self.history['total_brood'][idx]
-                    occupancy = self.history['brood_occupancy_pct'][idx]
-                    capacity = self.get_max_brood_capacity()
-
-                    # Calculate percentages of total brood
-                    egg_pct = (eggs / total * 100) if total > 0 else 0
-                    larvae_pct = (larvae / total * 100) if total > 0 else 0
-                    pupae_pct = (pupae / total * 100) if total > 0 else 0
-
-                    # Format tooltip text
-                    text = f"{date} (Day {days[idx]})\n"
-                    text += f"Occupancy: {occupancy:.1f}%\n"
-                    text += f"Total: {total:,} / {capacity:,} cells\n"
-                    text += f"─────────────────\n"
-                    text += f"Eggs:   {eggs:5,} ({egg_pct:4.1f}%)\n"
-                    text += f"Larvae: {larvae:5,} ({larvae_pct:4.1f}%)\n"
-                    text += f"Pupae:  {pupae:5,} ({pupae_pct:4.1f}%)"
-
-                    annot.set_text(text)
-                    annot.xy = (days[idx], self.history['brood_occupancy_pct'][idx])
-                    annot.set_visible(True)
-                    fig.canvas.draw_idle()
-                else:
-                    if annot.get_visible():
-                        annot.set_visible(False)
-                        fig.canvas.draw_idle()
-
-        # Connect the hover event
-        fig.canvas.mpl_connect("motion_notify_event", hover)
-
-        plt.tight_layout()
-        plt.show()
-
-    def print_seasonal_summary(self):
-        """
-        Print a summary of the simulation with seasonal highlights.
-
-        Useful for understanding which flow periods had the most impact
-        on colony dynamics.
-        """
-        print("\n=== Seasonal Flow Summary ===")
-
-        # Find all unique flow names that were active during simulation
-        all_flows = set()
-        for flow_list in self.history['active_flows']:
-            all_flows.update(flow_list)
-
-        print(f"Total unique flows encountered: {len(all_flows)}")
-        print(f"Flows: {', '.join(sorted(all_flows))}")
-
-        # Find peak population
-        max_adults = max(self.history['adult_bees'])
-        max_adults_day = self.history['adult_bees'].index(max_adults)
-        max_adults_date = self.history['calendar_date'][max_adults_day]
-
-        print(f"\nPeak adult population: {max_adults:,} bees on day {max_adults_day} ({max_adults_date})")
-
-        # Find max brood
-        max_brood = max(self.history['total_brood'])
-        max_brood_day = self.history['total_brood'].index(max_brood)
-        max_brood_date = self.history['calendar_date'][max_brood_day]
-
-        print(f"Peak brood: {max_brood:,} cells on day {max_brood_day} ({max_brood_date})")
-
-        # Find max and min egg laying rates
-        max_egg_rate = max(self.history['effective_egg_rate'])
-        min_egg_rate = min(self.history['effective_egg_rate'])
-
-        print(f"\nEgg laying rate range: {min_egg_rate} - {max_egg_rate} eggs/day")
-        print(f"Base rate: {self.base_egg_laying_rate} eggs/day")
-
-        # Honey production summary
-        total_produced = sum(self.history['daily_honey_production'])
-        total_consumed = sum(self.history['daily_honey_consumption'])
-        max_stores = max(self.history['honey_stores'])
-
-        print(f"\n=== Honey Production Summary ===")
-        print(f"Total honey produced: {total_produced:.1f} kg")
-        print(f"Total honey consumed: {total_consumed:.1f} kg")
-        print(f"Net honey gain: {total_produced - total_consumed:.1f} kg")
-        print(f"Peak honey stores: {max_stores:.1f} kg")
-        print(f"Final honey stores: {self.honey_stores:.1f} kg")
-
-        # Count supering recommendations
-        super_count = sum(1 for rec in self.history['supering_recommendations'] if rec)
-        if super_count > 0:
-            print(f"\n🍯 Supering recommended {super_count} times during simulation")
-            print(f"Review the simulation output above for specific dates")
+        # Call parent's run_simulation which now handles everything silently
+        return super().run_simulation(num_days, frames_to_add, queen_loss_day)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
-from bee_population import *
+from bee_population import BeeHiveSimulator
+from simulation_reporter import SimulationReporter
+from simulation_plotter import SimulationPlotter
 
 sim = BeeHiveSimulator(
     total_frames=10,
@@ -8,9 +10,14 @@ sim = BeeHiveSimulator(
 )
 
 # Queen is lost on day 3
-sim.run_simulation(
+results = sim.run_simulation(
     num_days=80,
     frames_to_add={1: 2, 10: 1, 20: 1},
     queen_loss_day=3
-)
-sim.plot_results()
+).to_dataframes()
+
+reporter = SimulationReporter(results)
+reporter.print_summary()
+
+plotter = SimulationPlotter(results)
+plotter.plot_all()
